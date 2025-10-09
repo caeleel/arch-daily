@@ -1,24 +1,50 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Arch Daily Slideshow Viewer
+
+A Next.js application that displays Arch Daily slideshow galleries in a customizable, easy-to-navigate interface.
+
+## Features
+
+- **Simple URL Input**: Paste any Arch Daily slideshow link to view the gallery
+- **Beautiful Slideshow**: Clean, modern interface with smooth navigation
+- **Keyboard Support**: Use arrow keys to navigate between images
+- **Image Counter**: Always know which image you're viewing (x/y format)
+- **Responsive Design**: Works on desktop and mobile devices
+- **Loading States**: Visual feedback while fetching data
 
 ## Getting Started
 
-First, run the development server:
+First, install dependencies:
+
+```bash
+npm install
+```
+
+Then, run the development server:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000) with your browser to see the application.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## How to Use
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+1. Copy a link to an Arch Daily slideshow (e.g., from archdaily.com)
+2. Paste the link into the input field on the homepage
+3. Click "Generate" or press Enter
+4. Browse through the slideshow using:
+   - Navigation arrows (previous/next)
+   - Keyboard arrow keys
+   - Click "Back" to return to the input screen
+
+## Technical Details
+
+The app consists of:
+- **Frontend** (`app/page.tsx`): Input interface and slideshow display
+- **API Route** (`app/api/parse-slideshow/route.ts`): Fetches and parses HTML to extract image data
+- **Components**:
+  - `Slideshow.tsx`: Main slideshow component with navigation
+  - `LoadingSpinner.tsx`: Loading indicator
 
 ## Learn More
 
