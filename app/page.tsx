@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Slideshow from './components/Slideshow';
 import LoadingSpinner from './components/LoadingSpinner';
 
@@ -10,20 +10,50 @@ interface SlideImage {
   caption: string;
 }
 
+// Extract slideshow identifier from ArchDaily URL
+// Example: "https://www.archdaily.com/1002775/fake-realness-installation-nultudio-plus-palma/6492388b5921185aa0184e61-fake-realness-installation-nultudio-plus-palma-photo"
+// Returns: "1002775-6492388b5921185aa0184e61"
+function extractSlideshowId(url: string): string | null {
+  try {
+    const urlObj = new URL(url);
+    const pathParts = urlObj.pathname.split('/').filter(p => p);
+
+    if (pathParts.length < 3) return null;
+
+    const rootPath = pathParts[0]; // e.g., "1002775"
+    const lastPart = pathParts[pathParts.length - 1]; // e.g., "6492388b5921185aa0184e61-fake-realness-installation-nultudio-plus-palma-photo"
+    const guidLike = lastPart.split('-')[0]; // e.g., "6492388b5921185aa0184e61"
+
+    return `${rootPath}-${guidLike}`;
+  } catch {
+    return null;
+  }
+}
+
+// Reconstruct ArchDaily URL from slideshow identifier
+// Example: "1002775-6492388b5921185aa0184e61"
+// Returns: "https://www.archdaily.com/1002775/0/6492388b5921185aa0184e61"
+function reconstructUrl(slideshowId: string): string | null {
+  try {
+    const parts = slideshowId.split('-');
+    if (parts.length !== 2) return null;
+
+    const [rootPath, guidLike] = parts;
+    return `https://www.archdaily.com/${rootPath}/0/${guidLike}`;
+  } catch {
+    return null;
+  }
+}
+
 export default function Home() {
   const [url, setUrl] = useState('');
   const [images, setImages] = useState<SlideImage[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [initialLoad, setInitialLoad] = useState(true);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-
-    if (!url.trim()) {
-      setError('Please enter a URL');
-      return;
-    }
-
+  // Function to fetch slideshow data
+  const fetchSlideshow = async (targetUrl: string) => {
     setLoading(true);
     setError(null);
     setImages([]);
@@ -34,7 +64,7 @@ export default function Home() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ url }),
+        body: JSON.stringify({ url: targetUrl }),
       });
 
       const data = await response.json();
@@ -44,12 +74,77 @@ export default function Home() {
       }
 
       setImages(data.images);
+
+      // Update URL with slideshow identifier
+      const slideshowId = extractSlideshowId(targetUrl);
+      if (slideshowId) {
+        const newUrl = new URL(window.location.href);
+        newUrl.searchParams.set('s', slideshowId);
+        window.history.pushState({}, '', newUrl.toString());
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
     } finally {
       setLoading(false);
+      setInitialLoad(false);
     }
   };
+
+  // Check for 's' query parameter on page load
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const slideshowId = params.get('s');
+
+    if (slideshowId) {
+      const reconstructedUrl = reconstructUrl(slideshowId);
+      if (reconstructedUrl) {
+        setUrl(reconstructedUrl);
+        fetchSlideshow(reconstructedUrl);
+      }
+    } else {
+      setInitialLoad(false);
+    }
+  }, []);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!url.trim()) {
+      setError('Please enter a URL');
+      return;
+    }
+
+    await fetchSlideshow(url);
+  };
+
+  // Show loading screen if we're loading from a query parameter
+  if (initialLoad && loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-white">
+        <div className="w-64 h-2 bg-gray-200 rounded-full overflow-hidden">
+          <div className="h-full bg-black rounded-full animate-progress" style={{
+            animation: 'progress 2s ease-in-out infinite',
+          }} />
+        </div>
+        <style jsx>{`
+          @keyframes progress {
+            0% {
+              width: 0%;
+            }
+            50% {
+              width: 70%;
+            }
+            100% {
+              width: 100%;
+            }
+          }
+          .animate-progress {
+            animation: progress 2s ease-in-out infinite;
+          }
+        `}</style>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex items-center justify-center p-8 bg-background">
@@ -110,7 +205,13 @@ export default function Home() {
           )}
         </div>
       ) : (
-        <Slideshow images={images} onBack={() => setImages([])} />
+        <Slideshow images={images} onBack={() => {
+          setImages([]);
+          // Clear the 's' query parameter from URL
+          const newUrl = new URL(window.location.href);
+          newUrl.searchParams.delete('s');
+          window.history.pushState({}, '', newUrl.toString());
+        }} />
       )}
     </div>
   );
