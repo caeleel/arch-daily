@@ -154,7 +154,7 @@ export async function POST(request: NextRequest) {
 
     // Extract metadata
     const title = extractTitle(html);
-    const thumbnail = allImages[0]?.url_slideshow || allImages[0]?.url_medium || '';
+    const thumbnail = allImages[0]?.url_medium || allImages[0]?.url_slideshow || '';
 
     return NextResponse.json({
       images,
