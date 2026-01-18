@@ -1,9 +1,47 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { SlideImage, buildSlideshowUrl } from '@/app/types';
 
-interface SlideImage {
-  url_large: string;
-  image_alt: string;
-  caption: string;
+// Check if URL is a slideshow URL (has nonce in path) or a base article URL
+function isSlideshowUrl(url: string): boolean {
+  try {
+    const urlObj = new URL(url);
+    const pathParts = urlObj.pathname.split('/').filter(p => p);
+    // Slideshow URLs have 3+ parts: number, slug, nonce-slug-photo
+    // Base URLs have 2 parts: number, slug
+    return pathParts.length >= 3;
+  } catch {
+    return false;
+  }
+}
+
+// Extract article ID from URL
+function extractArticleId(url: string): string {
+  const urlObj = new URL(url);
+  const pathParts = urlObj.pathname.split('/').filter(p => p);
+  return pathParts[0];
+}
+
+// Extract nonce from base article page HTML
+function extractNonceFromHtml(html: string): string | null {
+  const match = html.match(/#newsroom-picture-att-id-([a-f0-9]+)\s*\{/);
+  return match ? match[1] : null;
+}
+
+// Extract nonce from slideshow URL
+function extractNonceFromUrl(url: string): string {
+  const urlObj = new URL(url);
+  const pathParts = urlObj.pathname.split('/').filter(p => p);
+  // Last part is like "6492388b5921185aa0184e61-fake-realness-photo"
+  const lastPart = pathParts[pathParts.length - 1];
+  return lastPart.split('-')[0];
+}
+
+// Extract title from HTML, removing the " - N" suffix
+function extractTitle(html: string): string {
+  const match = html.match(/<title>([^<]+)<\/title>/);
+  if (!match) return 'Untitled';
+  // Remove " - 1" or similar suffix from "Gallery of Rooms / Ando Corporation  - 1"
+  return match[1].replace(/\s+-\s+\d+$/, '').trim();
 }
 
 function decodeHtmlEntities(text: string): string {
@@ -21,7 +59,7 @@ function decodeHtmlEntities(text: string): string {
 
 export async function POST(request: NextRequest) {
   try {
-    const { url } = await request.json();
+    let { url } = await request.json();
 
     if (!url) {
       return NextResponse.json(
@@ -30,11 +68,42 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Fetch the HTML from the provided URL
+    let articleId: string;
+    let nonce: string;
+
+    // If this is a base article URL, we need to extract the nonce first
+    if (!isSlideshowUrl(url)) {
+      const baseResponse = await fetch(url);
+      if (!baseResponse.ok) {
+        return NextResponse.json(
+          { error: 'Failed to fetch article page' },
+          { status: 500 }
+        );
+      }
+
+      const baseHtml = await baseResponse.text();
+      const extractedNonce = extractNonceFromHtml(baseHtml);
+
+      if (!extractedNonce) {
+        return NextResponse.json(
+          { error: 'Could not find slideshow nonce in article page' },
+          { status: 404 }
+        );
+      }
+
+      articleId = extractArticleId(url);
+      nonce = extractedNonce;
+      url = buildSlideshowUrl(articleId, nonce);
+    } else {
+      articleId = extractArticleId(url);
+      nonce = extractNonceFromUrl(url);
+    }
+
+    // Fetch the HTML from the slideshow URL
     const response = await fetch(url);
     if (!response.ok) {
       return NextResponse.json(
-        { error: 'Failed to fetch URL' },
+        { error: 'Failed to fetch slideshow page' },
         { status: 500 }
       );
     }
@@ -78,11 +147,24 @@ export async function POST(request: NextRequest) {
     // Extract only the fields we need
     const images: SlideImage[] = allImages.map((img: any) => ({
       url_large: img.url_large,
+      url_medium: img.url_medium,
       image_alt: img.image_alt,
       caption: img.caption
     }));
 
-    return NextResponse.json({ images });
+    // Extract metadata
+    const title = extractTitle(html);
+    const thumbnail = allImages[0]?.url_slideshow || allImages[0]?.url_medium || '';
+
+    return NextResponse.json({
+      images,
+      metadata: {
+        articleId,
+        nonce,
+        title,
+        thumbnail
+      }
+    });
 
   } catch (error) {
     console.error('Error parsing slideshow:', error);

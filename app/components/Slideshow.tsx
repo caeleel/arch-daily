@@ -1,23 +1,23 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-
-interface SlideImage {
-  url_large: string;
-  image_alt: string;
-  caption: string;
-}
+import { SlideImage, SlideshowMetadata } from '@/app/types';
+import { toggleFavorite, isFavorite } from '@/app/storage';
 
 interface SlideshowProps {
   images: SlideImage[];
+  metadata: SlideshowMetadata;
   onBack: () => void;
 }
 
-export default function Slideshow({ images, onBack }: SlideshowProps) {
+export default function Slideshow({ images, metadata, onBack }: SlideshowProps) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [showControls, setShowControls] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [hideTimeout, setHideTimeout] = useState<NodeJS.Timeout | null>(null);
+  const [largeImageLoaded, setLargeImageLoaded] = useState(false);
+  const [isHoveringControls, setIsHoveringControls] = useState(false);
+  const [isFavorited, setIsFavorited] = useState(false);
 
   const handlePrevious = () => {
     setCurrentIndex((prev) => (prev > 0 ? prev - 1 : images.length - 1));
@@ -35,11 +35,31 @@ export default function Slideshow({ images, onBack }: SlideshowProps) {
       clearTimeout(hideTimeout);
     }
 
-    // Set new timeout to hide controls after 3 seconds of inactivity
+    // Only set hide timeout if not hovering over controls
+    if (!isHoveringControls) {
+      const timeout = setTimeout(() => {
+        setShowControls(false);
+      }, 3000);
+
+      setHideTimeout(timeout);
+    }
+  };
+
+  const handleControlMouseEnter = () => {
+    setIsHoveringControls(true);
+    // Clear any pending hide timeout
+    if (hideTimeout) {
+      clearTimeout(hideTimeout);
+      setHideTimeout(null);
+    }
+  };
+
+  const handleControlMouseLeave = () => {
+    setIsHoveringControls(false);
+    // Start the hide timeout when leaving controls
     const timeout = setTimeout(() => {
       setShowControls(false);
     }, 3000);
-
     setHideTimeout(timeout);
   };
 
@@ -79,6 +99,29 @@ export default function Slideshow({ images, onBack }: SlideshowProps) {
     return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
   }, []);
 
+  // Reset large image loaded state when current index changes
+  useEffect(() => {
+    setLargeImageLoaded(false);
+  }, [currentIndex]);
+
+  // Preload all medium resolution images
+  useEffect(() => {
+    images.forEach((image) => {
+      const img = new Image();
+      img.src = image.url_medium;
+    });
+  }, [images]);
+
+  // Load initial favorite state
+  useEffect(() => {
+    isFavorite(metadata.articleId).then(setIsFavorited);
+  }, [metadata.articleId]);
+
+  const handleToggleFavorite = async () => {
+    const newState = await toggleFavorite(metadata.articleId);
+    setIsFavorited(newState);
+  };
+
   if (images.length === 0) {
     return null;
   }
@@ -90,12 +133,24 @@ export default function Slideshow({ images, onBack }: SlideshowProps) {
       className="fixed inset-0 bg-black"
       onMouseMove={handleMouseMove}
     >
-      {/* Main Image - Centered and Scaled */}
-      <div className="absolute inset-0 flex items-center justify-center">
+      {/* Medium resolution image - loads first */}
+      <div className="absolute inset-0">
+        <img
+          src={currentImage.url_medium}
+          alt={currentImage.image_alt}
+          className="w-full h-full object-contain"
+        />
+      </div>
+
+      {/* Large resolution image - overlays on top when loaded */}
+      <div className={`absolute inset-0 transition-opacity duration-300 ${
+        largeImageLoaded ? 'opacity-100' : 'opacity-0'
+      }`}>
         <img
           src={currentImage.url_large}
           alt={currentImage.image_alt}
-          className="max-w-full max-h-full object-contain"
+          className="w-full h-full object-contain"
+          onLoad={() => setLargeImageLoaded(true)}
         />
       </div>
 
@@ -110,6 +165,8 @@ export default function Slideshow({ images, onBack }: SlideshowProps) {
             }
             onBack();
           }}
+          onMouseEnter={handleControlMouseEnter}
+          onMouseLeave={handleControlMouseLeave}
           className="pointer-events-auto absolute top-6 right-6 bg-black/50 text-white p-2 hover:shadow-[inset_0_0_0_1px_rgba(255,255,255,1)]"
           aria-label="Close slideshow"
         >
@@ -137,6 +194,8 @@ export default function Slideshow({ images, onBack }: SlideshowProps) {
         {/* Previous Button */}
         <button
           onClick={handlePrevious}
+          onMouseEnter={handleControlMouseEnter}
+          onMouseLeave={handleControlMouseLeave}
           className="pointer-events-auto absolute left-6 top-1/2 -translate-y-1/2 bg-black/50 text-white p-3 hover:shadow-[inset_0_0_0_1px_rgba(255,255,255,1)]"
           aria-label="Previous image"
         >
@@ -159,6 +218,8 @@ export default function Slideshow({ images, onBack }: SlideshowProps) {
         {/* Next Button */}
         <button
           onClick={handleNext}
+          onMouseEnter={handleControlMouseEnter}
+          onMouseLeave={handleControlMouseLeave}
           className="pointer-events-auto absolute right-6 top-1/2 -translate-y-1/2 bg-black/50 text-white p-3 hover:shadow-[inset_0_0_0_1px_rgba(255,255,255,1)]"
           aria-label="Next image"
         >
@@ -191,9 +252,72 @@ export default function Slideshow({ images, onBack }: SlideshowProps) {
             )}
           </div>
 
+          {/* Favorite Button */}
+          <button
+            onClick={handleToggleFavorite}
+            onMouseEnter={handleControlMouseEnter}
+            onMouseLeave={handleControlMouseLeave}
+            className="ml-4 text-white hover:text-white/80 transition-colors"
+            aria-label={isFavorited ? "Remove from favorites" : "Add to favorites"}
+          >
+            {isFavorited ? (
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                className="w-5 h-5"
+              >
+                <path d="m11.645 20.91-.007-.003-.022-.012a15.247 15.247 0 0 1-.383-.218 25.18 25.18 0 0 1-4.244-3.17C4.688 15.36 2.25 12.174 2.25 8.25 2.25 5.322 4.714 3 7.688 3A5.5 5.5 0 0 1 12 5.052 5.5 5.5 0 0 1 16.313 3c2.973 0 5.437 2.322 5.437 5.25 0 3.925-2.438 7.111-4.739 9.256a25.175 25.175 0 0 1-4.244 3.17 15.247 15.247 0 0 1-.383.219l-.022.012-.007.004-.003.001a.752.752 0 0 1-.704 0l-.003-.001Z" />
+              </svg>
+            ) : (
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+                strokeWidth={2}
+                stroke="currentColor"
+                className="w-5 h-5"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M21 8.25c0-2.485-2.099-4.5-4.688-4.5-1.935 0-3.597 1.126-4.312 2.733-.715-1.607-2.377-2.733-4.313-2.733C5.1 3.75 3 5.765 3 8.25c0 7.22 9 12 9 12s9-4.78 9-12Z"
+                />
+              </svg>
+            )}
+          </button>
+
+          {/* External Link Button */}
+          <a
+            href={`https://www.archdaily.com/${metadata.articleId}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            onMouseEnter={handleControlMouseEnter}
+            onMouseLeave={handleControlMouseLeave}
+            className="ml-4 text-white hover:text-white/80 transition-colors"
+            aria-label="View on ArchDaily"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              strokeWidth={2}
+              stroke="currentColor"
+              className="w-5 h-5"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"
+              />
+            </svg>
+          </a>
+
           {/* Fullscreen Button */}
           <button
             onClick={toggleFullscreen}
+            onMouseEnter={handleControlMouseEnter}
+            onMouseLeave={handleControlMouseLeave}
             className="ml-4 text-white hover:text-white/80 transition-colors"
             aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
           >
