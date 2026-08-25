@@ -1,61 +1,76 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Slideshow from './components/Slideshow';
-import LoadingSpinner from './components/LoadingSpinner';
-import { SlideImage, SlideshowMetadata, StoredProject, buildSlideshowUrl } from '@/app/types';
-import { saveProject, getRecents, getFavorites } from '@/app/storage';
+import Nav from './components/Nav';
+import { SlideImage, SlideshowMetadata, buildSlideshowUrl } from '@/app/types';
+import { InspireView, nextImage, previousImage, currentView } from '@/app/inspire';
+import { saveProject } from '@/app/storage';
 
-const RECENTS_PAGE_SIZE = 24;
+interface Viewer {
+  images: SlideImage[];
+  metadata: SlideshowMetadata;
+}
 
-export default function Home() {
+export default function Daily() {
   const [url, setUrl] = useState('');
-  const [images, setImages] = useState<SlideImage[]>([]);
-  const [metadata, setMetadata] = useState<SlideshowMetadata | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [view, setView] = useState<InspireView | null>(null);
+  const [imageLoaded, setImageLoaded] = useState(false);
+  const [advancing, setAdvancing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [initialLoad, setInitialLoad] = useState(true);
 
-  const [activeTab, setActiveTab] = useState<'recents' | 'favorites'>('recents');
-  const [recents, setRecents] = useState<StoredProject[]>([]);
-  const [favorites, setFavorites] = useState<StoredProject[]>([]);
-  const [recentsOffset, setRecentsOffset] = useState(0);
-  const [hasMoreRecents, setHasMoreRecents] = useState(false);
+  const [viewer, setViewer] = useState<Viewer | null>(null);
+  const [viewerLoading, setViewerLoading] = useState(false);
 
-  // Load recents and favorites
-  const loadProjects = useCallback(async () => {
-    const [recentsList, favoritesList] = await Promise.all([
-      getRecents(RECENTS_PAGE_SIZE, 0),
-      getFavorites()
-    ]);
-    setRecents(recentsList);
-    setFavorites(favoritesList);
-    setRecentsOffset(0);
-    setHasMoreRecents(recentsList.length === RECENTS_PAGE_SIZE);
-  }, []);
+  const started = useRef(false);
+  const imageRef = useRef<HTMLImageElement>(null);
 
-  // Load more recents
-  const loadMoreRecents = async () => {
-    const newOffset = recentsOffset + RECENTS_PAGE_SIZE;
-    const moreRecents = await getRecents(RECENTS_PAGE_SIZE, newOffset);
-    setRecents(prev => [...prev, ...moreRecents]);
-    setRecentsOffset(newOffset);
-    setHasMoreRecents(moreRecents.length === RECENTS_PAGE_SIZE);
+  // Fade a newly shown image in. Stepping back lands on an image the browser
+  // has already cached, which can finish loading before React attaches onLoad,
+  // so check `complete` rather than waiting for an event that never fires.
+  useEffect(() => {
+    setImageLoaded(imageRef.current?.complete ?? false);
+  }, [view?.image?.image_id]);
+
+  // Pull the next image: served from the local cache when one is left over
+  // from the current page, otherwise fetched from the API.
+  const showNext = async () => {
+    setAdvancing(true);
+    setError(null);
+
+    try {
+      const next = await nextImage();
+      setView(next);
+      if (!next.image) {
+        setError('No image available right now.');
+      }
+    } catch {
+      // Offline or the API is down - fall back to the last image we showed
+      const previous = currentView();
+      if (previous.image) {
+        setView(previous);
+      } else {
+        setError('Could not reach ArchDaily. Try again in a moment.');
+      }
+    } finally {
+      setAdvancing(false);
+    }
   };
 
-  // Function to fetch slideshow data
-  const fetchSlideshow = async (targetUrl: string) => {
-    setLoading(true);
+  const showPrevious = () => {
     setError(null);
-    setImages([]);
-    setMetadata(null);
+    setView(previousImage());
+  };
+
+  // Open a project in the slideshow viewer
+  const openProject = async (targetUrl: string) => {
+    setViewerLoading(true);
+    setError(null);
 
     try {
       const response = await fetch('/api/parse-slideshow', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: targetUrl }),
       });
 
@@ -65,43 +80,21 @@ export default function Home() {
         throw new Error(data.error || 'Failed to fetch slideshow');
       }
 
-      setImages(data.images);
-      setMetadata(data.metadata);
-
-      // Save to storage
+      setViewer({ images: data.images, metadata: data.metadata });
       await saveProject(data.metadata);
 
-      // Update URL with slideshow identifier
+      // Keep the slideshow shareable via the 's' query parameter
       const newUrl = new URL(window.location.href);
       newUrl.searchParams.set('s', `${data.metadata.articleId}-${data.metadata.nonce}`);
       window.history.pushState({}, '', newUrl.toString());
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
     } finally {
-      setLoading(false);
-      setInitialLoad(false);
+      setViewerLoading(false);
     }
   };
 
-  // Check for 's' query parameter on page load
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const slideshowId = params.get('s');
-
-    if (slideshowId) {
-      const parts = slideshowId.split('-');
-      if (parts.length === 2) {
-        const reconstructedUrl = buildSlideshowUrl(parts[0], parts[1]);
-        setUrl(reconstructedUrl);
-        fetchSlideshow(reconstructedUrl);
-      }
-    } else {
-      setInitialLoad(false);
-      loadProjects();
-    }
-  }, []);
-
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!url.trim()) {
@@ -109,206 +102,143 @@ export default function Home() {
       return;
     }
 
-    await fetchSlideshow(url);
+    openProject(url);
   };
 
+  // A shared link (?s=...) opens straight into the viewer, otherwise show
+  // today's image.
+  useEffect(() => {
+    if (started.current) return;
+    started.current = true;
+
+    const params = new URLSearchParams(window.location.search);
+    const slideshowId = params.get('s');
+    const parts = slideshowId?.split('-') ?? [];
+
+    if (parts.length === 2) {
+      openProject(buildSlideshowUrl(parts[0], parts[1]));
+    } else {
+      showNext();
+    }
+  }, []);
+
   const handleBack = () => {
-    setImages([]);
-    setMetadata(null);
-    // Clear the 's' query parameter from URL
+    setViewer(null);
+
     const newUrl = new URL(window.location.href);
     newUrl.searchParams.delete('s');
     window.history.pushState({}, '', newUrl.toString());
-    // Reload projects to reflect any changes
-    loadProjects();
+
+    // Arrived through a shared link, so there is no daily image behind it yet
+    if (!view) {
+      showNext();
+    }
   };
 
-  const handleTileClick = (project: StoredProject) => {
-    const projectUrl = buildSlideshowUrl(project.articleId, project.nonce);
-    setUrl(projectUrl);
-    fetchSlideshow(projectUrl);
-  };
-
-  // Show loading screen if we're loading from a query parameter
-  if (initialLoad && loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-white">
-        <div className="w-64 h-2 bg-gray-200 rounded-full overflow-hidden">
-          <div className="h-full bg-black rounded-full animate-progress" style={{
-            animation: 'progress 2s ease-in-out infinite',
-          }} />
-        </div>
-        <style jsx>{`
-          @keyframes progress {
-            0% {
-              width: 0%;
-            }
-            50% {
-              width: 70%;
-            }
-            100% {
-              width: 100%;
-            }
-          }
-          .animate-progress {
-            animation: progress 2s ease-in-out infinite;
-          }
-        `}</style>
-      </div>
-    );
+  if (viewer) {
+    return <Slideshow images={viewer.images} metadata={viewer.metadata} onBack={handleBack} />;
   }
 
-  if (images.length > 0 && metadata) {
-    return (
-      <Slideshow images={images} metadata={metadata} onBack={handleBack} />
-    );
-  }
-
-  const displayedProjects = activeTab === 'recents' ? recents : favorites;
+  const image = view?.image ?? null;
+  const busy = advancing || viewerLoading;
+  const canGoBack = !!image && view!.index > 0;
 
   return (
-    <div className="min-h-screen bg-background">
-      {/* URL Bar at Top */}
-      <div className="sticky top-0 bg-background z-10 px-8 pt-8 pb-8 border-b border-black/10">
-        <form onSubmit={handleSubmit} className="flex items-center max-w-4xl mx-auto">
-          {/* Link Icon */}
-          <div className="text-foreground opacity-60 mr-3">
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              fill="none"
-              viewBox="0 0 24 24"
-              strokeWidth={2}
-              stroke="currentColor"
-              className="w-5 h-5"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244"
-              />
-            </svg>
-          </div>
+    <div className="fixed inset-0 bg-black overflow-hidden">
+      {image && (
+        <img
+          key={image.image_id}
+          ref={imageRef}
+          src={image.image_url}
+          alt={image.project_title}
+          onLoad={() => setImageLoaded(true)}
+          className={`w-full h-full object-cover transition-opacity duration-500 ${
+            imageLoaded ? 'opacity-100' : 'opacity-0'
+          }`}
+        />
+      )}
 
-          <div className="flex flex-1">
-            {/* Input Field */}
+      {/* Slight scrim so the white UI stays legible over bright images */}
+      <div className="absolute inset-0 bg-black/15 pointer-events-none" />
+
+      {/* Loading bar, shown while fetching the image or parsing a project */}
+      {(busy || (!image && !error)) && (
+        <div className="absolute top-0 left-0 right-0 h-0.5 overflow-hidden">
+          <div className="h-full w-1/3 bg-white animate-loading-bar" />
+        </div>
+      )}
+
+      {error && (
+        <div className="absolute inset-0 flex items-center justify-center px-8">
+          <div className="text-white text-sm text-center">
+            {error}
+            {image && (
+              <a
+                href={image.project_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block mt-2 underline underline-offset-4 hover:text-gray-300"
+              >
+                Open on ArchDaily
+              </a>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Project title, top left */}
+      {image && (
+        <div className="absolute inset-x-0 top-0">
+          <div className="px-10 pt-8">
+            <button
+              onClick={() => openProject(image.project_url)}
+              disabled={busy}
+              className="text-left text-white font-bold cursor-pointer disabled:underline disabled:underline-offset-4 disabled:cursor-default"
+            >
+              <div className="text-lg leading-tight">{image.project_title}</div>
+              {image.image_caption && (
+                <div className="text-white text-xs font-normal leading-tight mt-1">
+                  {image.image_caption}
+                </div>
+              )}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Bottom bar: link generation on the left, navigation on the right */}
+      <div className="absolute inset-x-0 bottom-0">
+        <div className="flex items-end justify-between gap-6 px-10 pb-8">
+          <form
+            onSubmit={handleSubmit}
+            className="flex items-stretch border border-white text-white font-bold"
+          >
             <input
               type="url"
               value={url}
               onChange={(e) => setUrl(e.target.value)}
-              placeholder="Enter Arch Daily URL..."
-              className="flex-1 px-4 py-2 border-t border-b border-l border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-foreground focus:outline-none focus:ring-0"
-              disabled={loading}
+              placeholder="Paste an ArchDaily link"
+              disabled={busy}
+              className="h-9 w-56 sm:w-80 px-4 bg-transparent text-sm placeholder:text-white/60 placeholder:font-normal focus:outline-none"
             />
 
-            {/* Generate Button */}
             <button
               type="submit"
-              disabled={loading}
-              className="px-6 py-2 bg-black hover:bg-gray-800 disabled:bg-gray-400 text-white font-semibold transition-colors focus:outline-none flex items-center justify-center min-w-[120px] border-l border-l-gray-700"
+              disabled={busy}
+              className="flex items-center h-9 px-4 border-l border-white text-sm cursor-pointer hover:bg-white/10 disabled:text-gray-500 disabled:cursor-default disabled:hover:bg-transparent transition-colors"
             >
-              {loading ? (
-                <div className="w-5 h-5">
-                  <LoadingSpinner />
-                </div>
-              ) : (
-                'Generate'
-              )}
+              Generate slideshow
             </button>
-          </div>
-        </form>
+          </form>
 
-        {/* Error Message */}
-        {error && (
-          <div className="mt-4 p-4 bg-red-100 dark:bg-red-900/30 border border-red-400 dark:border-red-700 text-red-700 dark:text-red-300 rounded-lg max-w-4xl mx-auto">
-            {error}
-          </div>
-        )}
-      </div>
-
-      {/* Tab Selector */}
-      <div className="px-8 py-4 max-w-4xl mx-auto">
-        <div className="flex">
-          <button
-            onClick={() => setActiveTab('recents')}
-            className={`px-8 py-2 font-medium transition-colors ${activeTab === 'recents'
-              ? 'text-white bg-black dark:text-black dark:bg-white'
-              : 'text-gray-500 hover:text-foreground'
-              }`}
-          >
-            Recents
-          </button>
-          <button
-            onClick={() => setActiveTab('favorites')}
-            className={`px-8 py-2 font-medium transition-colors ${activeTab === 'favorites'
-              ? 'text-white bg-black dark:text-black dark:bg-white'
-              : 'text-gray-500 hover:text-foreground'
-              }`}
-          >
-            Favorites
-          </button>
+          <Nav
+            page="daily"
+            onPrevious={showPrevious}
+            onNext={showNext}
+            canGoBack={canGoBack}
+            busy={busy}
+          />
         </div>
-      </div>
-
-      {/* Tile Grid */}
-      <div className="px-8 pb-8 max-w-4xl mx-auto">
-        {displayedProjects.length === 0 ? (
-          <div className="text-center text-gray-500 py-12">
-            {activeTab === 'recents'
-              ? 'No recent projects yet. Enter a URL above to get started!'
-              : 'No favorites yet. Heart a project to save it here!'}
-          </div>
-        ) : (
-          <>
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-              {displayedProjects.map((project) => (
-                <button
-                  key={project.articleId}
-                  onClick={() => handleTileClick(project)}
-                  className="group relative aspect-square bg-gray-100 dark:bg-gray-800 overflow-hidden hover:ring-2 hover:ring-black dark:hover:ring-white transition-all"
-                >
-                  {project.thumbnail && (
-                    <img
-                      src={project.thumbnail}
-                      alt={project.title}
-                      className="w-full h-full object-cover"
-                    />
-                  )}
-                  {/* Title overlay */}
-                  <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-3">
-                    <div className="text-white text-xs leading-tight line-clamp-2 text-left">
-                      {project.title}
-                    </div>
-                  </div>
-                  {/* Favorite indicator */}
-                  {project.isFavorite && (
-                    <div className="absolute top-2 right-2 text-white drop-shadow-lg">
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        viewBox="0 0 24 24"
-                        fill="currentColor"
-                        className="w-4 h-4"
-                      >
-                        <path d="m11.645 20.91-.007-.003-.022-.012a15.247 15.247 0 0 1-.383-.218 25.18 25.18 0 0 1-4.244-3.17C4.688 15.36 2.25 12.174 2.25 8.25 2.25 5.322 4.714 3 7.688 3A5.5 5.5 0 0 1 12 5.052 5.5 5.5 0 0 1 16.313 3c2.973 0 5.437 2.322 5.437 5.25 0 3.925-2.438 7.111-4.739 9.256a25.175 25.175 0 0 1-4.244 3.17 15.247 15.247 0 0 1-.383.219l-.022.012-.007.004-.003.001a.752.752 0 0 1-.704 0l-.003-.001Z" />
-                      </svg>
-                    </div>
-                  )}
-                </button>
-              ))}
-            </div>
-
-            {/* Load More Button (only for recents) */}
-            {activeTab === 'recents' && hasMoreRecents && (
-              <div className="mt-6 text-center">
-                <button
-                  onClick={loadMoreRecents}
-                  className="px-6 py-2 border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
-                >
-                  More
-                </button>
-              </div>
-            )}
-          </>
-        )}
       </div>
     </div>
   );

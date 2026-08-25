@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { SlideImage, SlideshowMetadata } from '@/app/types';
 import { toggleFavorite, isFavorite } from '@/app/storage';
 
@@ -12,12 +12,13 @@ interface SlideshowProps {
 
 export default function Slideshow({ images, metadata, onBack }: SlideshowProps) {
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [showControls, setShowControls] = useState(false);
+  const [showControls, setShowControls] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [hideTimeout, setHideTimeout] = useState<NodeJS.Timeout | null>(null);
   const [largeImageLoaded, setLargeImageLoaded] = useState(false);
   const [isHoveringControls, setIsHoveringControls] = useState(false);
   const [isFavorited, setIsFavorited] = useState(false);
+  const largeImageRef = useRef<HTMLImageElement>(null);
 
   const handlePrevious = () => {
     setCurrentIndex((prev) => (prev > 0 ? prev - 1 : images.length - 1));
@@ -89,6 +90,16 @@ export default function Slideshow({ images, metadata, onBack }: SlideshowProps) 
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [currentIndex]);
 
+  // Start with the controls up so it's obvious the viewer opened - the image
+  // can be the very one the daily page was already showing - then fade them
+  // out on the usual idle timeout.
+  useEffect(() => {
+    const timeout = setTimeout(() => setShowControls(false), 3000);
+    setHideTimeout(timeout);
+
+    return () => clearTimeout(timeout);
+  }, []);
+
   // Listen for fullscreen changes
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -99,9 +110,11 @@ export default function Slideshow({ images, metadata, onBack }: SlideshowProps) 
     return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
   }, []);
 
-  // Reset large image loaded state when current index changes
+  // Reset large image loaded state when current index changes. A cached image
+  // can finish loading before React attaches onLoad, so check `complete` too -
+  // otherwise the large layer would stay hidden and never fade in.
   useEffect(() => {
-    setLargeImageLoaded(false);
+    setLargeImageLoaded(largeImageRef.current?.complete ?? false);
   }, [currentIndex]);
 
   // Preload all medium resolution images
@@ -147,6 +160,7 @@ export default function Slideshow({ images, metadata, onBack }: SlideshowProps) 
         largeImageLoaded ? 'opacity-100' : 'opacity-0'
       }`}>
         <img
+          ref={largeImageRef}
           src={currentImage.url_large}
           alt={currentImage.image_alt}
           className="w-full h-full object-contain"

@@ -4,6 +4,8 @@ A Next.js application that displays Arch Daily slideshow galleries in a customiz
 
 ## Features
 
+- **Daily Landing Image**: The front page shows a fresh full-screen ArchDaily image on each visit, pulled from the same "inspire me" API the Chrome extension uses
+- **Offline-friendly Caching**: Each API call returns 10 images; they're cached in `localStorage` along with the current index, so only every 10th landing hits the network
 - **Simple URL Input**: Paste any Arch Daily slideshow link to view the gallery
 - **Beautiful Slideshow**: Clean, modern interface with smooth navigation
 - **Keyboard Support**: Use arrow keys to navigate between images
@@ -29,6 +31,14 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 
 ## How to Use
 
+### Landing page (`/`)
+
+- Each visit shows a new full-screen image
+- Click the **project title** to open that project in the slideshow viewer
+- Click **History** to reach the URL input, recents and favorites
+
+### History page (`/history`)
+
 1. Copy a link to an Arch Daily slideshow (e.g., from archdaily.com)
 2. Paste the link into the input field on the homepage
 3. Click "Generate" or press Enter
@@ -40,7 +50,9 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 ## Technical Details
 
 The app consists of:
-- **Frontend** (`app/page.tsx`): Input interface and slideshow display
+- **Landing** (`app/page.tsx`): Daily full-screen image, opens projects in the viewer
+- **Image Cache** (`app/inspire.ts`): `localStorage` day/page/index state plus the cached image list
+- **History** (`app/history/page.tsx`): Input interface and slideshow display
 - **API Route** (`app/api/parse-slideshow/route.ts`): Fetches and parses HTML to extract image data
 - **Components**:
   - `Slideshow.tsx`: Main slideshow component with navigation

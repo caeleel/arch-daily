@@ -32,3 +32,12 @@ export interface StoredProject {
 export function buildSlideshowUrl(articleId: string, nonce: string): string {
   return `https://www.archdaily.com/${articleId}/0/${nonce}`;
 }
+
+// Image from the ArchDaily "inspire me" API used on the landing page
+export interface InspireImage {
+  image_id: string;
+  image_url: string;
+  image_caption: string;
+  project_url: string;
+  project_title: string;
+}
