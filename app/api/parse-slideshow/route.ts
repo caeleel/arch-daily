@@ -1,171 +1,151 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { SlideImage, buildSlideshowUrl } from '@/app/types';
+import { SlideImage, buildArticleUrl } from '@/app/types';
 
-// Check if URL is a slideshow URL (has nonce in path) or a base article URL
-function isSlideshowUrl(url: string): boolean {
+// ArchDaily serves gallery images from a CDN path whose second-to-last segment
+// is a size bucket, e.g. .../2000/045c/medium_jpg/13_White_House.jpg. Swapping
+// that segment is how we get other resolutions of the same photo.
+const SIZE_SEGMENT = /\/(thumb_jpg|medium_jpg|large_jpg|slideshow|newsletter)\/(?=[^/]+$)/;
+
+const USER_AGENT =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+
+// Pull the numeric article id out of any ArchDaily URL shape: a bare id, a
+// base article URL, or an old slideshow/photo URL.
+function extractArticleId(input: string): string | null {
+  const trimmed = input.trim();
+
+  if (/^\d+$/.test(trimmed)) return trimmed;
+
   try {
-    const urlObj = new URL(url);
-    const pathParts = urlObj.pathname.split('/').filter(p => p);
-    // Slideshow URLs have 3+ parts: number, slug, nonce-slug-photo
-    // Base URLs have 2 parts: number, slug
-    return pathParts.length >= 3;
+    const url = new URL(trimmed);
+    if (!/(^|\.)archdaily\.com$/.test(url.hostname)) return null;
+    // Some locales prefix the path, e.g. /en/923364/slug - take the first
+    // segment that is all digits.
+    const digits = url.pathname.split('/').filter(Boolean).find(p => /^\d+$/.test(p));
+    return digits ?? null;
   } catch {
-    return false;
+    return null;
   }
 }
 
-// Extract article ID from URL
-function extractArticleId(url: string): string {
-  const urlObj = new URL(url);
-  const pathParts = urlObj.pathname.split('/').filter(p => p);
-  return pathParts[0];
-}
-
-// Extract nonce from base article page HTML
-function extractNonceFromHtml(html: string): string | null {
-  const match = html.match(/#newsroom-picture-att-id-([a-f0-9]+)\s*\{/);
+function getAttr(tag: string, name: string): string | null {
+  const match =
+    tag.match(new RegExp(`\\b${name}='([^']*)'`)) ||
+    tag.match(new RegExp(`\\b${name}="([^"]*)"`));
   return match ? match[1] : null;
 }
 
-// Extract nonce from slideshow URL
-function extractNonceFromUrl(url: string): string {
-  const urlObj = new URL(url);
-  const pathParts = urlObj.pathname.split('/').filter(p => p);
-  // Last part is like "6492388b5921185aa0184e61-fake-realness-photo"
-  const lastPart = pathParts[pathParts.length - 1];
-  return lastPart.split('-')[0];
-}
-
-// Extract title from HTML, removing the " - N" suffix
-function extractTitle(html: string): string {
-  const match = html.match(/<title>([^<]+)<\/title>/);
-  if (!match) return 'Untitled';
-  // Remove " - 1" or similar suffix from "Gallery of Rooms / Ando Corporation  - 1"
-  return match[1].replace(/\s+-\s+\d+$/, '').trim();
-}
-
 function decodeHtmlEntities(text: string): string {
-  const entities: { [key: string]: string } = {
+  const named: { [key: string]: string } = {
     '&quot;': '"',
     '&amp;': '&',
     '&lt;': '<',
     '&gt;': '>',
     '&#39;': "'",
-    '&apos;': "'"
+    '&apos;': "'",
+    '&nbsp;': ' '
   };
 
-  return text.replace(/&[a-z]+;|&#\d+;/g, (match) => entities[match] || match);
+  return text
+    .replace(/&[a-z]+;/gi, m => named[m.toLowerCase()] ?? m)
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)));
+}
+
+// The gallery lives in the article page markup as plain <img> tags. Most are
+// lazy-loaded, so the real URL is in data-src and `src` is a placeholder GIF.
+function extractImages(html: string): SlideImage[] {
+  const images: SlideImage[] = [];
+  const seen = new Set<string>();
+
+  for (const [tag] of html.matchAll(/<img\b[^>]*>/g)) {
+    const src = getAttr(tag, 'data-src') || getAttr(tag, 'src');
+    if (!src || !src.includes('/media/images/')) continue;
+
+    // The firm/author avatars live on the same CDN but are not gallery images.
+    if ((getAttr(tag, 'class') || '').includes('profile__avatar')) continue;
+
+    const sizeMatch = src.match(SIZE_SEGMENT);
+    if (!sizeMatch) continue;
+
+    // The `newsletter` bucket is the social/cover rendering of an image that
+    // already appears in the gallery under its own id.
+    if (sizeMatch[1] === 'newsletter') continue;
+
+    // Cache-busting query strings differ between size buckets, so drop them
+    // before using the path as an identity.
+    const clean = src.split('?')[0];
+    const key = clean.replace(SIZE_SEGMENT, '/');
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    images.push({
+      url_large: clean.replace(SIZE_SEGMENT, '/large_jpg/'),
+      url_medium: clean.replace(SIZE_SEGMENT, '/medium_jpg/'),
+      image_alt: decodeHtmlEntities(getAttr(tag, 'alt') || '')
+    });
+  }
+
+  return images;
+}
+
+function extractTitle(html: string): string {
+  // Inline <svg><title> elements follow the document title, so take the first.
+  const match = html.match(/<title>([^<]+)<\/title>/);
+  if (!match) return 'Untitled';
+  return decodeHtmlEntities(match[1]).replace(/\s*\|\s*ArchDaily\s*$/i, '').trim() || 'Untitled';
 }
 
 export async function POST(request: NextRequest) {
   try {
-    let { url } = await request.json();
+    const { url } = await request.json();
 
     if (!url) {
+      return NextResponse.json({ error: 'URL is required' }, { status: 400 });
+    }
+
+    const articleId = extractArticleId(url);
+    if (!articleId) {
       return NextResponse.json(
-        { error: 'URL is required' },
+        { error: 'Not a recognizable ArchDaily project URL' },
         { status: 400 }
       );
     }
 
-    let articleId: string;
-    let nonce: string;
+    // A bare article id redirects to the canonical slug URL, so we never need
+    // to know the slug ourselves.
+    const response = await fetch(buildArticleUrl(articleId), {
+      headers: { 'User-Agent': USER_AGENT, 'Accept-Language': 'en-US,en;q=0.9' },
+      redirect: 'follow'
+    });
 
-    // If this is a base article URL, we need to extract the nonce first
-    if (!isSlideshowUrl(url)) {
-      const baseResponse = await fetch(url);
-      if (!baseResponse.ok) {
-        return NextResponse.json(
-          { error: 'Failed to fetch article page' },
-          { status: 500 }
-        );
-      }
-
-      const baseHtml = await baseResponse.text();
-      const extractedNonce = extractNonceFromHtml(baseHtml);
-
-      if (!extractedNonce) {
-        return NextResponse.json(
-          { error: 'Could not find slideshow nonce in article page' },
-          { status: 404 }
-        );
-      }
-
-      articleId = extractArticleId(url);
-      nonce = extractedNonce;
-      url = buildSlideshowUrl(articleId, nonce);
-    } else {
-      articleId = extractArticleId(url);
-      nonce = extractNonceFromUrl(url);
-    }
-
-    // Fetch the HTML from the slideshow URL
-    const response = await fetch(url);
     if (!response.ok) {
+      // Surface the real status - when ArchDaily changes how it gates these
+      // pages, a bare "not found" sends you hunting in the wrong place.
       return NextResponse.json(
-        { error: 'Failed to fetch slideshow page' },
-        { status: 500 }
+        { error: `ArchDaily returned HTTP ${response.status} for article ${articleId}` },
+        { status: 502 }
       );
     }
 
     const html = await response.text();
+    const images = extractImages(html);
 
-    // Parse the HTML line by line to find data-images attribute
-    const lines = html.split('\n');
-    let dataImagesLine: string | null = null;
-
-    for (const line of lines) {
-      const trimmedLine = line.trim();
-      if (trimmedLine.startsWith('data-images=')) {
-        dataImagesLine = trimmedLine;
-        break;
-      }
-    }
-
-    if (!dataImagesLine) {
+    if (images.length === 0) {
       return NextResponse.json(
-        { error: 'data-images attribute not found in HTML' },
+        { error: `No gallery images found in article ${articleId}` },
         { status: 404 }
       );
     }
-
-    // Extract the JSON string from data-images="..."
-    const match = dataImagesLine.match(/data-images="([^"]*)"/);
-    if (!match || !match[1]) {
-      return NextResponse.json(
-        { error: 'Failed to extract data-images value' },
-        { status: 500 }
-      );
-    }
-
-    // HTML decode the extracted string
-    const decodedJson = decodeHtmlEntities(match[1]);
-
-    // Parse the JSON
-    const allImages = JSON.parse(decodedJson);
-
-    // Extract only the fields we need
-    const images: SlideImage[] = allImages.map((img: any) => ({
-      url_large: img.url_large,
-      url_medium: img.url_medium,
-      image_alt: img.image_alt,
-      caption: img.caption
-    }));
-
-    // Extract metadata
-    const title = extractTitle(html);
-    const thumbnail = allImages[0]?.url_medium || allImages[0]?.url_slideshow || '';
 
     return NextResponse.json({
       images,
       metadata: {
         articleId,
-        nonce,
-        title,
-        thumbnail
+        title: extractTitle(html),
+        thumbnail: images[0].url_medium
       }
     });
-
   } catch (error) {
     console.error('Error parsing slideshow:', error);
     return NextResponse.json(

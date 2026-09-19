@@ -2,12 +2,10 @@ export interface SlideImage {
   url_large: string;
   url_medium: string;
   image_alt: string;
-  caption: string;
 }
 
 export interface SlideshowMetadata {
   articleId: string;
-  nonce: string;
   title: string;
   thumbnail: string;
 }
@@ -19,18 +17,25 @@ export interface SlideshowResponse {
 
 export interface StoredProject {
   articleId: string;
-  nonce: string;
   title: string;
   thumbnail: string;
   viewedAt: number;
   isFavorite: boolean;
 }
 
-// Build slideshow URL from article ID and nonce
-// Example: buildSlideshowUrl("1002775", "6492388b5921185aa0184e61")
-// Returns: "https://www.archdaily.com/1002775/0/6492388b5921185aa0184e61"
-export function buildSlideshowUrl(articleId: string, nonce: string): string {
-  return `https://www.archdaily.com/${articleId}/0/${nonce}`;
+// Build an article URL from its id. A bare id redirects to the canonical slug
+// URL, so the slug never has to be stored or guessed.
+// Example: buildArticleUrl("923364") -> "https://www.archdaily.com/923364"
+export function buildArticleUrl(articleId: string): string {
+  return `https://www.archdaily.com/${articleId}`;
+}
+
+// Projects used to be identified by an article id plus a gallery nonce, shared
+// as "<articleId>-<nonce>". Only the article id is needed now, but old links
+// and stored records still carry the nonce.
+export function parseProjectParam(value: string): string | null {
+  const articleId = value.split('-')[0];
+  return /^\d+$/.test(articleId) ? articleId : null;
 }
 
 // Image from the ArchDaily "inspire me" API used on the landing page

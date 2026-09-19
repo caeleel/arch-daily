@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import Slideshow from '@/app/components/Slideshow';
 import Nav from '@/app/components/Nav';
-import { SlideImage, SlideshowMetadata, StoredProject, buildSlideshowUrl } from '@/app/types';
+import { SlideImage, SlideshowMetadata, StoredProject, buildArticleUrl, parseProjectParam } from '@/app/types';
 import { saveProject, getRecents, getFavorites } from '@/app/storage';
 
 const RECENTS_PAGE_SIZE = 24;
@@ -72,7 +72,7 @@ export default function History() {
 
       // Update URL with slideshow identifier
       const newUrl = new URL(window.location.href);
-      newUrl.searchParams.set('s', `${data.metadata.articleId}-${data.metadata.nonce}`);
+      newUrl.searchParams.set('s', data.metadata.articleId);
       window.history.pushState({}, '', newUrl.toString());
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
@@ -87,12 +87,13 @@ export default function History() {
     const params = new URLSearchParams(window.location.search);
     const slideshowId = params.get('s');
 
-    if (slideshowId) {
-      const parts = slideshowId.split('-');
-      if (parts.length === 2) {
-        fetchSlideshow(buildSlideshowUrl(parts[0], parts[1]));
-      }
+    const articleId = slideshowId ? parseProjectParam(slideshowId) : null;
+
+    if (articleId) {
+      fetchSlideshow(buildArticleUrl(articleId));
     } else {
+      // Covers both no 's' param and one we cannot parse - without the else
+      // an unparseable value left the page stuck on the loading screen.
       setInitialLoad(false);
       loadProjects();
     }
@@ -110,7 +111,7 @@ export default function History() {
   };
 
   const handleTileClick = (project: StoredProject) => {
-    fetchSlideshow(buildSlideshowUrl(project.articleId, project.nonce));
+    fetchSlideshow(buildArticleUrl(project.articleId));
   };
 
   // Show loading screen if we're loading from a query parameter

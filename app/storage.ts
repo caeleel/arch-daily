@@ -36,7 +36,6 @@ export async function saveProject(metadata: SlideshowMetadata): Promise<void> {
 
   const project: StoredProject = {
     articleId: metadata.articleId,
-    nonce: metadata.nonce,
     title: metadata.title,
     thumbnail: metadata.thumbnail,
     viewedAt: Date.now(),

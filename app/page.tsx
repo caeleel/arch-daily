@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import Slideshow from './components/Slideshow';
 import Nav from './components/Nav';
-import { SlideImage, SlideshowMetadata, buildSlideshowUrl } from '@/app/types';
+import { SlideImage, SlideshowMetadata, buildArticleUrl, parseProjectParam } from '@/app/types';
 import { InspireView, nextImage, previousImage, currentView } from '@/app/inspire';
 import { saveProject } from '@/app/storage';
 
@@ -85,7 +85,7 @@ export default function Daily() {
 
       // Keep the slideshow shareable via the 's' query parameter
       const newUrl = new URL(window.location.href);
-      newUrl.searchParams.set('s', `${data.metadata.articleId}-${data.metadata.nonce}`);
+      newUrl.searchParams.set('s', data.metadata.articleId);
       window.history.pushState({}, '', newUrl.toString());
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
@@ -113,10 +113,10 @@ export default function Daily() {
 
     const params = new URLSearchParams(window.location.search);
     const slideshowId = params.get('s');
-    const parts = slideshowId?.split('-') ?? [];
+    const articleId = slideshowId ? parseProjectParam(slideshowId) : null;
 
-    if (parts.length === 2) {
-      openProject(buildSlideshowUrl(parts[0], parts[1]));
+    if (articleId) {
+      openProject(buildArticleUrl(articleId));
     } else {
       showNext();
     }

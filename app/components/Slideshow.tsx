@@ -253,17 +253,12 @@ export default function Slideshow({ images, metadata, onBack }: SlideshowProps) 
           </svg>
         </button>
 
-        {/* Footer Bar with Caption and Fullscreen */}
+        {/* Footer Bar with Description and Fullscreen */}
         <div className="pointer-events-auto absolute bottom-0 left-0 right-0 bg-black/50 px-6 py-3 flex items-center justify-between">
           <div className="flex-1">
             <div className="text-white text-xs leading-tight">
               {currentImage.image_alt}
             </div>
-            {currentImage.caption && (
-              <div className="text-white/80 text-xs leading-tight mt-0.5">
-                {currentImage.caption}
-              </div>
-            )}
           </div>
 
           {/* Favorite Button */}
